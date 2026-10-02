@@ -1,0 +1,6 @@
+{
+  "name": "ctx-band",
+  "version": "0.1.0",
+  "description": "A band above the prompt: live context-window usage, per-turn token counts and a rotating blessing quote",
+  "types": "./types/index.d.ts"
+}
