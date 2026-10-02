@@ -96,6 +96,36 @@ describe('ctx-band', () => {
     await expect(band.find({ type: 'Text', text: 'context 10% · 108.2k / 1M' })).resolves.toBeDefined()
   })
 
+  test('between live reads the last live figure holds, not the measure snapshot', async ($: Engine, on) => {
+    let calls = 0
+    on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 162_700, window: 1_000_000, percent: 16 }, rateLimits: [] } }))
+    on('clock.now', () => ({ value: calls++ === 0 ? 1_000 : 1_050 }))
+    on('session.measure', ($_, e) => ({ changed: e.changed }))
+    on('ui.render', ($_, e) => e)
+
+    await $.session.measure({
+      context: { tokens: 157_300, window: 1_000_000, percent: 15 },
+      rateLimits: [],
+      changed: ['context'],
+    })
+
+    const band = await $.ui.mount({
+      plugin: 'ctx-band',
+      surface: 'terminal',
+      component: 'AbovePrompt',
+      props: {},
+    })
+
+    // 第一次绘制读到实时 162.7k；1 秒内再重绘（节流未放行）应沿用，不退回快照 157.3k
+    await expect(band.find({ type: 'Text', text: 'context 16% · 162.7k / 1M' })).resolves.toBeDefined()
+    await $.session.measure({
+      context: { tokens: 157_300, window: 1_000_000, percent: 15 },
+      rateLimits: [],
+      changed: ['context'],
+    })
+    await expect(band.find({ type: 'Text', text: 'context 16% · 162.7k / 1M' })).resolves.toBeDefined()
+  })
+
   test('before any turn there is no input/output line', async ($: Engine, on) => {
     on('session.measure', ($_, e) => ({ changed: e.changed }))
     on('ui.render', ($_, e) => e)

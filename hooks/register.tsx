@@ -394,6 +394,8 @@ const looping = new Set<string>()
 let workingNow = false
 // 上次实时读 usage 的时刻，切模型不触发 measure，绘制时按秒节流自己读
 let readAt = -Infinity
+// 最近一次实时读到的数；节流未放行的重绘沿用它，避免与 measure 快照交替闪烁
+let lastLive: Fill | null = null
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -444,13 +446,16 @@ export const register: Register = on => {
     workingNow = isWorking
 
     // 切换模型不推 measure，绘制时按秒节流读一次实时 usage；读不到就用快照
-    let view = f
+    let view = lastLive ?? f
     try {
       const now = await $.clock.now()
       if (now - readAt >= 1000) {
         readAt = now
         const { context } = await $.session.usage()
-        if (context.tokens != null) view = asFill(context)
+        if (context.tokens != null) {
+          view = asFill(context)
+          lastLive = view
+        }
       }
     } catch {
       /* 取不到实时值（或测试未桩）时退回快照 */
