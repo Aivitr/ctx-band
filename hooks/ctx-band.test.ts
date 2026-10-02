@@ -96,6 +96,22 @@ describe('ctx-band', () => {
     await expect(band.find({ type: 'Text', text: 'context 10% · 108.2k / 1M' })).resolves.toBeDefined()
   })
 
+  test('a fresh session shows the band from the first draw', async ($: Engine, on) => {
+    // 新会话还没有任何响应：measure 快照为空，窗口只有实时读取能给出
+    on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }))
+    on('clock.now', () => ({ value: 1 }))
+    on('ui.render', ($_, e) => e)
+
+    const band = await $.ui.mount({
+      plugin: 'ctx-band',
+      surface: 'terminal',
+      component: 'AbovePrompt',
+      props: {},
+    })
+
+    await expect(band.find({ type: 'Text', text: 'context 0% · 0 / 1M' })).resolves.toBeDefined()
+  })
+
   test('between live reads the last live figure holds, not the measure snapshot', async ($: Engine, on) => {
     let calls = 0
     on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 162_700, window: 1_000_000, percent: 16 }, rateLimits: [] } }))

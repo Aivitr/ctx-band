@@ -438,21 +438,21 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const f = await read($, fill)
-    if (f === null) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
     const last = await read($, io)
     const isWorking = e.props.isWorking
     workingNow = isWorking
 
-    // 切换模型不推 measure，绘制时按秒节流读一次实时 usage；读不到就用快照
+    // 切换模型不推 measure，绘制时按秒节流读一次实时 usage；读不到就用快照。
+    // 快照为空（新会话还没有任何响应）时也读一次，让 band 从第一帧就出现
     let view = lastLive ?? f
     try {
       const now = await $.clock.now()
-      if (now - readAt >= 1000) {
+      if (view === null || now - readAt >= 1000) {
         readAt = now
         const { context } = await $.session.usage()
-        if (context.tokens != null) {
+        if (context.tokens != null || view === null) {
           view = asFill(context)
           lastLive = view
         }
@@ -460,6 +460,7 @@ export const register: Register = on => {
     } catch {
       /* 取不到实时值（或测试未桩）时退回快照 */
     }
+    if (view === null) return next(e)
 
     const left: unknown[] = [
       <Text key="ctx" dimColor>
