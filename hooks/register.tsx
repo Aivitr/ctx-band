@@ -467,11 +467,18 @@ export const register: Register = on => {
         context {view.pct}% · {fmt(view.tokens)} / {fmt(view.win)}
       </Text>,
     ]
+    // 没有已完成的轮次（新会话）时用占位符，band 从第一帧起就是完整形状
     if (last !== null) {
       left.push(
         <Text key="sep" dimColor> · </Text>,
         <Text key="in" color="success">↑ {fmt(last.in)}</Text>,
         <Text key="out" color="error">{'  '}↓ {fmt(last.out)}</Text>
+      )
+    } else {
+      left.push(
+        <Text key="sep" dimColor> · </Text>,
+        <Text key="in" dimColor>↑ --</Text>,
+        <Text key="out" dimColor>{'  '}↓ --</Text>
       )
     }
 

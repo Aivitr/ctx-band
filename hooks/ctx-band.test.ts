@@ -142,7 +142,7 @@ describe('ctx-band', () => {
     await expect(band.find({ type: 'Text', text: 'context 16% · 162.7k / 1M' })).resolves.toBeDefined()
   })
 
-  test('before any turn there is no input/output line', async ($: Engine, on) => {
+  test('before any turn the token slots show placeholders', async ($: Engine, on) => {
     on('session.measure', ($_, e) => ({ changed: e.changed }))
     on('ui.render', ($_, e) => e)
 
@@ -160,7 +160,8 @@ describe('ctx-band', () => {
     })
 
     await expect(band.find({ type: 'Text', text: 'context 18% · 36.1k / 200k' })).resolves.toBeDefined()
-    await expect(band.find({ type: 'Text', text: '↑' })).resolves.toBeUndefined()
+    await expect(band.find({ type: 'Text', text: '↑ --' })).resolves.toBeDefined()
+    await expect(band.find({ type: 'Text', text: '↓ --' })).resolves.toBeDefined()
   })
 
   test('subagent turns do not update the band', async ($: Engine, on) => {
@@ -190,7 +191,8 @@ describe('ctx-band', () => {
       props: {},
     })
 
-    await expect(band.find({ type: 'Text', text: '↑' })).resolves.toBeUndefined()
+    await expect(band.find({ type: 'Text', text: '↑ --' })).resolves.toBeDefined()
+    await expect(band.find({ type: 'Text', text: '↓ --' })).resolves.toBeDefined()
   })
 
   test('idle blessing is static text with a reroll button', async ($: Engine, on) => {
