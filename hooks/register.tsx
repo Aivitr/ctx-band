@@ -1,10 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Fill, Io } from '../types'
+import type { Stats } from '../types'
 
-const fill = atom({ plugin: 'ctx-band', key: 'fill' } as const, null)
-const io = atom({ plugin: 'ctx-band', key: 'io' } as const, null)
+const EMPTY: Stats = { tools: 0, failed: 0, requests: 0, in: 0, out: 0, cached: 0 }
+
+// 本次行动的累计：请求数、三类输入之和、输出、其中命中缓存的部分
+const stats = atom({ plugin: 'ctx-band', key: 'stats' } as const, EMPTY)
 const bless = atom({ plugin: 'ctx-band', key: 'bless' } as const, null)
 const turns = atom({ plugin: 'ctx-band', key: 'turns' } as const, 0)
 const frame = atom({ plugin: 'ctx-band', key: 'frame' } as const, 0)
@@ -377,10 +379,11 @@ const SPIN = SPIN_GLYPHS.map(g => packCell(g, ACCENT))
 const fmt = (n: number): string =>
   n < 1000 ? String(n) : n < 1_000_000 ? `${+(n / 1000).toFixed(1)}k` : `${+(n / 1_000_000).toFixed(2)}M`
 
-const asFill = (context: { tokens?: number; window: number; percent?: number }): Fill => {
-  const tokens = context.tokens ?? 0
-  return { pct: context.percent ?? Math.round((tokens / Math.max(1, context.window)) * 100), tokens, win: context.window }
-}
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+// 缓存命中率色阶：冷缓存刺眼，越热越绿
+export const cacheTone = (hit: number): string =>
+  hit < 20 ? '#e5484d' : hit < 40 ? '#f76b15' : hit < 60 ? '#ffb224' : hit < 80 ? '#4a9eff' : '#30a46c'
 
 // 换一句不重复的祝福语
 const reroll = (x: number | null): number => {
@@ -392,28 +395,49 @@ const reroll = (x: number | null): number => {
 const looping = new Set<string>()
 // 最近一次绘制时是否在工作；由 render 每次绘制刷新，动画循环每 tick 读取
 let workingNow = false
-// 上次实时读 usage 的时刻，切模型不触发 measure，绘制时按秒节流自己读
-let readAt = -Infinity
-// 最近一次实时读到的数；节流未放行的重绘沿用它，避免与 measure 快照交替闪烁
-let lastLive: Fill | null = null
-
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const now = await $.clock.now()
     await update($, bless, () => now % BLESSINGS.length)
     // 抬高代次，让热重载后旧模块残留的动画循环自行退出
     await update($, gen, g => g + 1)
-
-    const { context } = await $.session.usage()
-    if (context.tokens != null)
-      await update($, fill, f => f ?? asFill(context))
     return next(e)
   })
 
-  on('session.measure', async ($, e, next) => {
-    if (!e.changed.includes('context')) return next(e)
-    await update($, fill, () => asFill(e.context))
+  on('turn.start', async ($, e, next) => {
+    await update($, stats, () => EMPTY)
     return next(e)
+  })
+
+  // 工具调用计数：deny 或报错记一次失败
+  on('tool.call', async ($, e, next) => {
+    let ok = false
+    try {
+      const result = await next(e)
+      ok = result.deny === undefined && !result.isError
+      return result
+    } finally {
+      await update($, stats, s => ({ ...s, tools: s.tools + 1, failed: s.failed + (ok ? 0 : 1) }))
+    }
+  })
+
+  // 一次模型请求一步：请求数、输入输出、缓存命中都在这里累加
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    const usage = result.usage
+    if (usage) {
+      try {
+        await update($, stats, s => ({
+          requests: s.requests + 1,
+          in: s.in + usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
+          out: s.out + usage.output_tokens,
+          cached: s.cached + usage.cache_read_input_tokens,
+        }))
+      } catch {
+        /* 统计是附带的：写失败不能打断模型的回答 */
+      }
+    }
+    return result
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -422,65 +446,38 @@ export const register: Register = on => {
       const n = (await read($, turns)) + 1
       await update($, turns, () => n)
       if (n % 3 === 0) await update($, bless, reroll)
-
-      if (e.usage) {
-        const u = e.usage
-        const turn: Io = {
-          in: u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens,
-          out: u.output_tokens,
-        }
-        await update($, io, () => turn)
-      }
     }
     return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const f = await read($, fill)
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const last = await read($, io)
+    const s = await read($, stats)
     const isWorking = e.props.isWorking
     workingNow = isWorking
 
-    // 切换模型不推 measure，绘制时按秒节流读一次实时 usage；读不到就用快照。
-    // 快照为空（新会话还没有任何响应）时也读一次，让 band 从第一帧就出现
-    let view = lastLive ?? f
-    try {
-      const now = await $.clock.now()
-      if (view === null || now - readAt >= 1000) {
-        readAt = now
-        const { context } = await $.session.usage()
-        if (context.tokens != null || view === null) {
-          view = asFill(context)
-          lastLive = view
-        }
-      }
-    } catch {
-      /* 取不到实时值（或测试未桩）时退回快照 */
+    // 本次行动的各段按有无依次出现，段间统一 · 分隔；还没开始就一行 idle
+    const left: unknown[] = []
+    const add = (key: string, node: unknown) => {
+      if (left.length) left.push(<Text key={`sep-${key}`} dimColor>{'  ·  '}</Text>)
+      left.push(node)
     }
-    if (view === null) return next(e)
-
-    const left: unknown[] = [
-      <Text key="ctx" dimColor>
-        context {view.pct}% · {fmt(view.tokens)} / {fmt(view.win)}
-      </Text>,
-    ]
-    // 没有已完成的轮次（新会话）时用占位符，band 从第一帧起就是完整形状
-    if (last !== null) {
-      left.push(
-        <Text key="sep" dimColor> · </Text>,
-        <Text key="in" color="success">↑ {fmt(last.in)}</Text>,
-        <Text key="out" color="error">{'  '}↓ {fmt(last.out)}</Text>
+    const hit = s.in ? Math.round((s.cached / s.in) * 100) : 0
+    if (s.tools) add('tools', <Text key="tools" dimColor>{plural(s.tools, 'tool')}</Text>)
+    if (s.failed) add('failed', <Text key="failed" color="error">{`${s.failed} failed`}</Text>)
+    if (s.requests) add('req', <Text key="req" dimColor>{plural(s.requests, 'request')}</Text>)
+    if (s.in || s.out)
+      add(
+        'io',
+        <Text key="io">
+          <Text color="success">↑ {fmt(s.in)}</Text>
+          <Text color="error">{'  '}↓ {fmt(s.out)}</Text>
+        </Text>
       )
-    } else {
-      left.push(
-        <Text key="sep" dimColor> · </Text>,
-        <Text key="in" dimColor>↑ --</Text>,
-        <Text key="out" dimColor>{'  '}↓ --</Text>
-      )
-    }
+    if (s.in) add('cache', <Text key="cache" color={cacheTone(hit)}>cache {hit}%</Text>)
+    if (!left.length) left.push(<Text key="idle" dimColor>idle</Text>)
 
     const b = await read($, bless)
     let right: unknown = <Box />

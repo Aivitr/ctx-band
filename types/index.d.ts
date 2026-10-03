@@ -1,8 +1,7 @@
-export type Fill = { pct: number; tokens: number; win: number }
-export type Io = { in: number; out: number }
+export type Stats = { tools: number; failed: number; requests: number; in: number; out: number; cached: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'ctx-band': { fill: Fill | null; io: Io | null; bless: number | null; turns: number; frame: number; gen: number }
+    'ctx-band': { stats: Stats; bless: number | null; turns: number; frame: number; gen: number }
   }
 }
